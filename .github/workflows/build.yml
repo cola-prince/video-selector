@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build ${{ matrix.artifact }}
@@ -33,15 +36,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
 
@@ -50,11 +53,11 @@ jobs:
 
       - name: Locate ffprobe
         id: ffprobe
-        shell: bash
+        shell: pwsh
         run: |
-          ffprobe_bin="$(command -v ffprobe)"
-          "$ffprobe_bin" -version
-          echo "bin=$ffprobe_bin" >> "$GITHUB_OUTPUT"
+          $ffprobeBin = (Get-Command ffprobe -ErrorAction Stop).Source
+          & $ffprobeBin -version
+          "bin=$ffprobeBin" >> $env:GITHUB_OUTPUT
 
       - name: Install dependencies
         run: uv sync --extra dev
@@ -79,7 +82,7 @@ jobs:
           }
 
       - name: Upload executable
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.package }}
