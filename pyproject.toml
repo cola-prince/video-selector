@@ -1,0 +1,25 @@
+[project]
+name = "video-selector"
+version = "0.1.0"
+description = "TUI tool for finding video combinations that match a target duration."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.89.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[project.scripts]
+video-selector = "video_selector.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
