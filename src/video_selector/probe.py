@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
@@ -14,12 +15,34 @@ class ProbeError(RuntimeError):
 ProbeRunner = Callable[[Path], float]
 
 
+def ffprobe_executable() -> str:
+    """Return bundled ffprobe when running from PyInstaller, otherwise PATH lookup."""
+    for candidate in _bundled_ffprobe_candidates():
+        if candidate.is_file():
+            return str(candidate)
+    return "ffprobe"
+
+
+def _bundled_ffprobe_candidates() -> list[Path]:
+    names = ["ffprobe.exe"] if sys.platform == "win32" else ["ffprobe"]
+    roots: list[Path] = []
+
+    pyinstaller_root = getattr(sys, "_MEIPASS", None)
+    if pyinstaller_root:
+        roots.append(Path(pyinstaller_root))
+
+    if getattr(sys, "frozen", False):
+        roots.append(Path(sys.executable).resolve().parent)
+
+    return [root / name for root in roots for name in names]
+
+
 def probe_duration(path: Path) -> float:
     """Read media duration in seconds using ffprobe."""
     try:
         completed = subprocess.run(
             [
-                "ffprobe",
+                ffprobe_executable(),
                 "-v",
                 "error",
                 "-show_entries",
@@ -34,7 +57,7 @@ def probe_duration(path: Path) -> float:
             timeout=15,
         )
     except FileNotFoundError as exc:
-        raise ProbeError("ffprobe was not found on PATH.") from exc
+        raise ProbeError("ffprobe was not bundled and was not found on PATH.") from exc
     except subprocess.TimeoutExpired as exc:
         raise ProbeError(f"ffprobe timed out for {path}") from exc
     except subprocess.CalledProcessError as exc:

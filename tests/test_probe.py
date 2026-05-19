@@ -1,7 +1,24 @@
 from pathlib import Path
 
-from video_selector.probe import ProbeError, probe_videos
+from video_selector import probe as probe_module
+from video_selector.probe import ProbeError, ffprobe_executable, probe_videos
 from video_selector.scanner import VideoFile
+
+
+def test_ffprobe_executable_prefers_pyinstaller_bundle(tmp_path, monkeypatch):
+    executable_name = "ffprobe.exe" if probe_module.sys.platform == "win32" else "ffprobe"
+    bundled_ffprobe = tmp_path / executable_name
+    bundled_ffprobe.write_text("")
+    monkeypatch.setattr(probe_module.sys, "_MEIPASS", str(tmp_path), raising=False)
+
+    assert ffprobe_executable() == str(bundled_ffprobe)
+
+
+def test_ffprobe_executable_falls_back_to_path(monkeypatch):
+    monkeypatch.delattr(probe_module.sys, "_MEIPASS", raising=False)
+    monkeypatch.setattr(probe_module.sys, "frozen", False, raising=False)
+
+    assert ffprobe_executable() == "ffprobe"
 
 
 def test_probe_videos_collects_successes_and_probe_warnings():

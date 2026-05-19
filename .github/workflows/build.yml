@@ -1,0 +1,86 @@
+name: Build executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: video-selector-linux-x64
+            executable: dist/video-selector
+            package: video-selector-linux-x64.tar.gz
+          - os: windows-latest
+            artifact: video-selector-windows-x64
+            executable: dist/video-selector.exe
+            package: video-selector-windows-x64.zip
+          - os: macos-15
+            artifact: video-selector-macos-arm64
+            executable: dist/video-selector
+            package: video-selector-macos-arm64.tar.gz
+          - os: macos-15-intel
+            artifact: video-selector-macos-x64
+            executable: dist/video-selector
+            package: video-selector-macos-x64.tar.gz
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up FFmpeg
+        uses: AnimMouse/setup-ffmpeg@v1
+
+      - name: Locate ffprobe
+        id: ffprobe
+        shell: bash
+        run: |
+          ffprobe_bin="$(command -v ffprobe)"
+          "$ffprobe_bin" -version
+          echo "bin=$ffprobe_bin" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Build executable
+        shell: bash
+        env:
+          FFPROBE_BIN: ${{ steps.ffprobe.outputs.bin }}
+        run: uv run --with pyinstaller pyinstaller --clean --noconfirm video_selector.spec
+
+      - name: Package executable
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq "Windows") {
+            Compress-Archive -Path "${{ matrix.executable }}" -DestinationPath "${{ matrix.package }}" -Force
+          } else {
+            chmod +x "${{ matrix.executable }}"
+            tar -czf "${{ matrix.package }}" -C dist video-selector
+          }
+
+      - name: Upload executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.package }}
+          if-no-files-found: error
