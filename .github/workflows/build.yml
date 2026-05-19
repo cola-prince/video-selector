@@ -45,8 +45,6 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v8.1.0
-        with:
-          enable-cache: true
 
       - name: Set up FFmpeg
         uses: AnimMouse/setup-ffmpeg@v1
