@@ -16,6 +16,10 @@ uv run video-selector
 When running from source, the app requires `ffprobe` to be available on `PATH`.
 Release executables built by GitHub Actions bundle `ffprobe`.
 
+Click `Refresh Cache` for a root directory to store local video metadata. After
+that, the directory list and matching flow read from the cache; press Enter in
+the root input to load existing cached directories without refreshing.
+
 Supported duration formats:
 
 - `123`

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,10 +13,12 @@ from textual.widgets import (
     Header,
     Input,
     Label,
+    ProgressBar,
     RichLog,
     Static,
 )
 
+from video_selector.cache import CacheRefreshProgress, CacheRefreshResult, VideoCache
 from video_selector.duration import (
     DurationParseError,
     format_duration,
@@ -25,13 +26,11 @@ from video_selector.duration import (
     parse_tolerance,
 )
 from video_selector.export import export_matches
-from video_selector.probe import probe_videos
-from video_selector.scanner import discover_descendant_dirs, find_video_paths
 from video_selector.search import SearchResult, find_matches
 
 
 DEFAULT_MAX_RESULTS = 20
-DEFAULT_TIMEOUT_SECONDS = 5 * 60
+DEFAULT_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -39,16 +38,6 @@ class MatchJob:
     result: SearchResult
     warnings: list[str]
     video_count: int
-
-
-def parse_positive_float(value: str, label: str) -> float:
-    try:
-        parsed = float(value.strip())
-    except ValueError as exc:
-        raise ValueError(f"{label} must be a number.") from exc
-    if not math.isfinite(parsed) or parsed <= 0:
-        raise ValueError(f"{label} must be a finite number greater than zero.")
-    return parsed
 
 
 class VideoSelectorApp(App[None]):
@@ -97,6 +86,10 @@ class VideoSelectorApp(App[None]):
         border: solid $secondary;
     }
 
+    #refresh-progress {
+        margin-bottom: 1;
+    }
+
     #status {
         height: auto;
         padding: 0 1;
@@ -113,6 +106,7 @@ class VideoSelectorApp(App[None]):
     ]
 
     directories: list[Path]
+    cache: VideoCache
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -128,7 +122,7 @@ class VideoSelectorApp(App[None]):
                     placeholder="Tolerance seconds, e.g. -1,10",
                     id="tolerance",
                 )
-                yield Input(placeholder="Root directory", id="root")
+                yield Input(placeholder="Root directory, Enter loads cache", id="root")
                 yield Input(placeholder="Optional output directory", id="output")
                 yield Input(
                     value=str(DEFAULT_MAX_RESULTS),
@@ -136,15 +130,11 @@ class VideoSelectorApp(App[None]):
                     id="max-results",
                 )
                 yield Input(
-                    value=f"{DEFAULT_TIMEOUT_SECONDS:g}",
-                    placeholder="Search timeout seconds",
-                    id="timeout-seconds",
-                )
-                yield Input(
                     value="1", placeholder="Min files per result", id="min-files"
                 )
+                yield ProgressBar(id="refresh-progress")
                 with Horizontal(classes="button-row"):
-                    yield Button("Scan", id="scan", variant="primary")
+                    yield Button("Refresh Cache", id="refresh-cache", variant="primary")
                     yield Button("Find", id="find", variant="success")
                 with Horizontal(classes="button-row"):
                     yield Button("All", id="select-all")
@@ -152,7 +142,7 @@ class VideoSelectorApp(App[None]):
             with Vertical(id="workspace"):
                 yield Label("Directories", classes="section-title")
                 with VerticalScroll(id="directory-list"):
-                    yield Static("Enter a root directory and press Scan.")
+                    yield Static("Enter a root directory and refresh cache.")
                 yield Label("Results", classes="section-title")
                 yield RichLog(id="results", wrap=True, highlight=True)
         yield Static("Ready.", id="status")
@@ -160,11 +150,13 @@ class VideoSelectorApp(App[None]):
 
     def on_mount(self) -> None:
         self.directories = []
+        self.cache = VideoCache()
+        self.query_one("#refresh-progress", ProgressBar).update(total=1, progress=0)
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
-        if button_id == "scan":
-            await self.scan_directories()
+        if button_id == "refresh-cache":
+            await self.refresh_cache()
         elif button_id == "find":
             await self.find_matches()
         elif button_id == "select-all":
@@ -172,41 +164,74 @@ class VideoSelectorApp(App[None]):
         elif button_id == "clear-selection":
             self.set_all_directories(False)
 
-    async def scan_directories(self) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "root":
+            return
+        root_text = event.value.strip()
+        if not root_text:
+            self.set_status("Root directory is required.")
+            return
+
+        root = Path(root_text).expanduser().resolve()
+        if await self.load_cached_directories(root):
+            self.set_status(f"Loaded {len(self.directories)} cached directories.")
+
+    async def refresh_cache(self) -> None:
         root_text = self.query_one("#root", Input).value.strip()
         if not root_text:
             self.set_status("Root directory is required.")
             return
 
-        root = Path(root_text).expanduser()
-        self.set_status(f"Scanning directories under {root} ...")
+        root = Path(root_text).expanduser().resolve()
+        self.clear_results()
+        self.update_refresh_progress(CacheRefreshProgress("discovering", 0, 1))
+        self.set_status(f"Refreshing cache under {root} ...")
         try:
-            directories = await asyncio.to_thread(discover_descendant_dirs, root)
+            result = await asyncio.to_thread(
+                self.cache.refresh_root,
+                root,
+                progress=self.threaded_refresh_progress,
+            )
         except Exception as exc:
             self.directories = []
             self.render_directories(root, [])
-            self.set_status(f"Directory scan failed: {exc}")
+            self.set_status(f"Cache refresh failed: {exc}")
             return
 
-        self.directories = directories
-        self.render_directories(root, directories)
-        self.set_status(f"Found {len(directories)} descendant directories.")
+        await self.load_cached_directories(root)
+        self.render_refresh_result(result)
 
     def render_directories(self, root: Path, directories: list[Path]) -> None:
         container = self.query_one("#directory-list", VerticalScroll)
         container.remove_children()
 
         if not directories:
-            container.mount(Static("No descendant directories found."))
+            container.mount(Static("No cached directories found. Refresh cache first."))
             return
 
         checkboxes: list[Checkbox] = []
         for directory in directories:
-            label = str(directory.relative_to(root))
+            try:
+                label = str(directory.relative_to(root))
+            except ValueError:
+                label = str(directory)
             checkbox = Checkbox(label, value=False)
             checkbox.directory_path = directory
             checkboxes.append(checkbox)
         container.mount_all(checkboxes)
+
+    async def load_cached_directories(self, root: Path) -> bool:
+        try:
+            directories = await asyncio.to_thread(self.cache.list_directories, root)
+        except Exception as exc:
+            self.directories = []
+            self.render_directories(root, [])
+            self.set_status(f"Could not read cache: {exc}")
+            return False
+
+        self.directories = directories
+        self.render_directories(root, directories)
+        return True
 
     def set_all_directories(self, value: bool) -> None:
         for checkbox in self.query("#directory-list Checkbox"):
@@ -218,10 +243,6 @@ class VideoSelectorApp(App[None]):
             tolerance = parse_tolerance(self.query_one("#tolerance", Input).value)
             output_text = self.query_one("#output", Input).value.strip()
             max_results = int(self.query_one("#max-results", Input).value.strip())
-            timeout_seconds = parse_positive_float(
-                self.query_one("#timeout-seconds", Input).value,
-                "Search timeout seconds",
-            )
             min_files = int(self.query_one("#min-files", Input).value.strip())
             if max_results <= 0:
                 raise ValueError("Max results must be greater than zero.")
@@ -236,16 +257,16 @@ class VideoSelectorApp(App[None]):
             self.set_status("Select at least one directory.")
             return
 
-        self.set_status("Scanning videos and searching combinations ...")
+        self.set_status("Reading cache and searching combinations ...")
         self.clear_results()
         job = await asyncio.to_thread(
             run_match_job,
+            self.cache,
             selected_dirs,
             target,
             tolerance,
             max_results,
             min_files,
-            timeout_seconds,
         )
         export_path: Path | None = None
         if output_text and job.result.matches:
@@ -256,11 +277,11 @@ class VideoSelectorApp(App[None]):
                     Path(output_text),
                 )
             except Exception as exc:
-                self.render_results(job, target, min_files, timeout_seconds)
+                self.render_results(job, target, min_files)
                 self.set_status(f"Results found, but export failed: {exc}")
                 return
 
-        self.render_results(job, target, min_files, timeout_seconds, export_path)
+        self.render_results(job, target, min_files, export_path)
 
     def selected_directories(self) -> list[Path]:
         selected: list[Path] = []
@@ -274,7 +295,6 @@ class VideoSelectorApp(App[None]):
         job: MatchJob,
         target: float,
         min_files: int,
-        timeout_seconds: float,
         export_path: Path | None = None,
     ) -> None:
         log = self.query_one("#results", RichLog)
@@ -301,7 +321,7 @@ class VideoSelectorApp(App[None]):
                 log.write("")
 
         status_parts = [
-            f"Scanned {job.video_count} videos",
+            f"Read {job.video_count} cached videos",
             f"target {format_duration(target)}",
             f"min files {min_files}",
             f"returned {len(job.result.matches)} matches",
@@ -309,7 +329,7 @@ class VideoSelectorApp(App[None]):
         if job.result.capped:
             status_parts.append("stopped at max results")
         if job.result.timed_out:
-            status_parts.append(f"timed out after {timeout_seconds:g}s")
+            status_parts.append(f"timed out after {DEFAULT_TIMEOUT_SECONDS:g}s")
         if export_path is not None:
             status_parts.append(f"exported to {export_path}")
         self.set_status("; ".join(status_parts) + ".")
@@ -320,26 +340,60 @@ class VideoSelectorApp(App[None]):
     def set_status(self, message: str) -> None:
         self.query_one("#status", Static).update(message)
 
+    def threaded_refresh_progress(self, progress: CacheRefreshProgress) -> None:
+        self.call_from_thread(self.update_refresh_progress, progress)
+
+    def update_refresh_progress(self, progress: CacheRefreshProgress) -> None:
+        bar = self.query_one("#refresh-progress", ProgressBar)
+        total = max(progress.total, 1)
+        bar.update(total=total, progress=progress.completed)
+        if progress.phase == "discovering":
+            self.set_status("Discovering videos for cache refresh ...")
+        elif progress.phase == "refreshing":
+            self.set_status(
+                f"Refreshing cache {progress.completed}/{progress.total} ..."
+            )
+        elif progress.phase == "done":
+            self.set_status(f"Cache refresh processed {progress.total} videos.")
+
+    def render_refresh_result(self, result: CacheRefreshResult) -> None:
+        log = self.query_one("#results", RichLog)
+        log.clear()
+        if result.warnings:
+            log.write("Warnings:")
+            for warning in result.warnings[:20]:
+                log.write(f"  - {warning}")
+            if len(result.warnings) > 20:
+                log.write(f"  - ... {len(result.warnings) - 20} more warnings")
+
+        self.set_status(
+            "Cache refreshed: "
+            f"{result.total} videos, "
+            f"{result.probed} probed, "
+            f"{result.reused} reused, "
+            f"{result.removed} stale removed, "
+            f"{len(result.warnings)} warnings."
+        )
+
 
 def run_match_job(
+    cache: VideoCache,
     directories: list[Path],
     target: float,
     tolerance: tuple[float, float],
     max_results: int,
     min_files: int,
-    timeout_seconds: float,
 ) -> MatchJob:
-    paths = find_video_paths(directories)
-    videos, warnings = probe_videos(paths)
+    videos = cache.list_videos(directories)
     result = find_matches(
         videos,
         target=target,
         tolerance=tolerance,
         max_results=max_results,
         min_files=min_files,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
     )
-    return MatchJob(result=result, warnings=warnings, video_count=len(videos))
+    return MatchJob(result=result, warnings=[], video_count=len(videos))
 
 
 def main() -> None:

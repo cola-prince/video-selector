@@ -1,28 +1,38 @@
-import pytest
+from pathlib import Path
 
-from video_selector.app import parse_positive_float
-
-
-def test_parse_positive_float_accepts_positive_seconds():
-    assert parse_positive_float("12.5", "Search timeout seconds") == 12.5
+from video_selector.app import run_match_job
+from video_selector.scanner import VideoFile
 
 
-def test_parse_positive_float_rejects_non_number():
-    with pytest.raises(ValueError, match="Search timeout seconds must be a number"):
-        parse_positive_float("soon", "Search timeout seconds")
+class FakeCache:
+    def __init__(self, videos):
+        self.videos = videos
+        self.directories = None
+
+    def list_videos(self, directories):
+        self.directories = directories
+        return self.videos
 
 
-def test_parse_positive_float_rejects_non_positive_value():
-    with pytest.raises(
-        ValueError,
-        match="Search timeout seconds must be a finite number greater than zero",
-    ):
-        parse_positive_float("0", "Search timeout seconds")
+def test_run_match_job_reads_videos_from_cache():
+    directory = Path("cached")
+    cache = FakeCache(
+        [
+            VideoFile(Path("cached/first.mp4"), duration=7),
+            VideoFile(Path("cached/second.mp4"), duration=5),
+        ]
+    )
 
+    job = run_match_job(
+        cache,
+        [directory],
+        target=12,
+        tolerance=(0, 0),
+        max_results=1,
+        min_files=2,
+    )
 
-def test_parse_positive_float_rejects_non_finite_value():
-    with pytest.raises(
-        ValueError,
-        match="Search timeout seconds must be a finite number greater than zero",
-    ):
-        parse_positive_float("nan", "Search timeout seconds")
+    assert cache.directories == [directory]
+    assert job.video_count == 2
+    assert job.warnings == []
+    assert len(job.result.matches) == 1
