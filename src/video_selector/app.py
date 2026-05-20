@@ -14,6 +14,7 @@ from video_selector.duration import (
     parse_duration,
     parse_tolerance,
 )
+from video_selector.export import export_matches
 from video_selector.probe import probe_videos
 from video_selector.scanner import discover_descendant_dirs, find_video_paths
 from video_selector.search import SearchResult, find_matches
@@ -101,6 +102,7 @@ class VideoSelectorApp(App[None]):
                 yield Input(placeholder="Target duration, e.g. 123, 01:23, 01:02:03", id="target")
                 yield Input(value="-1,10", placeholder="Tolerance seconds, e.g. -1,10", id="tolerance")
                 yield Input(placeholder="Root directory", id="root")
+                yield Input(placeholder="Optional output directory", id="output")
                 yield Input(value=str(DEFAULT_MAX_RESULTS), placeholder="Max results", id="max-results")
                 yield Input(value="1", placeholder="Min files per result", id="min-files")
                 with Horizontal(classes="button-row"):
@@ -176,6 +178,7 @@ class VideoSelectorApp(App[None]):
         try:
             target = parse_duration(self.query_one("#target", Input).value)
             tolerance = parse_tolerance(self.query_one("#tolerance", Input).value)
+            output_text = self.query_one("#output", Input).value.strip()
             max_results = int(self.query_one("#max-results", Input).value.strip())
             min_files = int(self.query_one("#min-files", Input).value.strip())
             if max_results <= 0:
@@ -202,7 +205,20 @@ class VideoSelectorApp(App[None]):
             min_files,
             DEFAULT_TIMEOUT_SECONDS,
         )
-        self.render_results(job, target, min_files)
+        export_path: Path | None = None
+        if output_text and job.result.matches:
+            try:
+                export_path = await asyncio.to_thread(
+                    export_matches,
+                    job.result.matches,
+                    Path(output_text),
+                )
+            except Exception as exc:
+                self.render_results(job, target, min_files)
+                self.set_status(f"Results found, but export failed: {exc}")
+                return
+
+        self.render_results(job, target, min_files, export_path)
 
     def selected_directories(self) -> list[Path]:
         selected: list[Path] = []
@@ -211,7 +227,13 @@ class VideoSelectorApp(App[None]):
                 selected.append(checkbox.directory_path)
         return selected
 
-    def render_results(self, job: MatchJob, target: float, min_files: int) -> None:
+    def render_results(
+        self,
+        job: MatchJob,
+        target: float,
+        min_files: int,
+        export_path: Path | None = None,
+    ) -> None:
         log = self.query_one("#results", RichLog)
         log.clear()
 
@@ -245,6 +267,8 @@ class VideoSelectorApp(App[None]):
             status_parts.append("stopped at max results")
         if job.result.timed_out:
             status_parts.append(f"timed out after {DEFAULT_TIMEOUT_SECONDS:g}s")
+        if export_path is not None:
+            status_parts.append(f"exported to {export_path}")
         self.set_status("; ".join(status_parts) + ".")
 
     def clear_results(self) -> None:
