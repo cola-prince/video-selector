@@ -40,7 +40,6 @@ def test_find_matches_sorts_by_delta_file_count_then_total_duration():
         (("ten.mp4",), 10.0, 0.0),
         (("four.mp4", "six.mp4"), 10.0, 0.0),
         (("eleven.mp4",), 11.0, 1.0),
-        (("five.mp4", "six.mp4"), 11.0, 1.0),
     ]
 
 
@@ -105,6 +104,64 @@ def test_find_matches_filters_by_min_files():
     assert match_summary(result) == [
         (("four.mp4", "six.mp4"), 10.0, 0.0),
         (("seven.mp4", "three.mp4"), 10.0, 0.0),
+    ]
+
+
+def test_find_matches_keeps_videos_unique_across_results():
+    videos = [
+        video("ten.mp4", 10),
+        video("six.mp4", 6),
+        video("four.mp4", 4),
+        video("seven.mp4", 7),
+        video("three.mp4", 3),
+    ]
+
+    result = find_matches(
+        videos,
+        target=10,
+        tolerance=(0, 0),
+        max_results=10,
+        timeout_seconds=60,
+        random_seed=0,
+    )
+
+    returned_paths = [
+        file.path
+        for match in result.matches
+        for file in match.files
+    ]
+    assert len(returned_paths) == len(set(returned_paths))
+    assert match_summary(result) == [
+        (("ten.mp4",), 10.0, 0.0),
+        (("four.mp4", "six.mp4"), 10.0, 0.0),
+        (("seven.mp4", "three.mp4"), 10.0, 0.0),
+    ]
+
+
+def test_find_matches_does_not_cap_before_finding_disjoint_results():
+    videos = [
+        video("ten.mp4", 10),
+        video("six.mp4", 6),
+        video("four.mp4", 4),
+        video("nine.mp4", 9),
+        video("one.mp4", 1),
+        video("seven.mp4", 7),
+        video("three.mp4", 3),
+    ]
+
+    result = find_matches(
+        videos,
+        target=10,
+        tolerance=(0, 0),
+        max_results=2,
+        timeout_seconds=60,
+        random_seed=0,
+    )
+
+    assert result.capped
+    assert match_summary(result) == [
+        (("ten.mp4",), 10.0, 0.0),
+        (("nine.mp4", "one.mp4"), 10.0, 0.0),
     ]
 
 

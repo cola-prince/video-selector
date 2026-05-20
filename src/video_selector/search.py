@@ -21,6 +21,25 @@ class SearchResult:
     capped: bool
 
 
+def _select_disjoint_matches(
+    candidates: list[Match],
+    max_results: int,
+) -> tuple[list[Match], bool]:
+    selected: list[Match] = []
+    used_paths = set()
+
+    for candidate in candidates:
+        candidate_paths = {video.path for video in candidate.files}
+        if candidate_paths & used_paths:
+            continue
+        if len(selected) >= max_results:
+            return selected, True
+        selected.append(candidate)
+        used_paths.update(candidate_paths)
+
+    return selected, False
+
+
 def find_matches(
     videos: list[VideoFile],
     target: float,
@@ -53,15 +72,14 @@ def find_matches(
     matches: list[Match] = []
     start = time.monotonic()
     timed_out = False
-    capped = False
     epsilon = 1e-6
 
     def timed_out_now() -> bool:
         return time.monotonic() - start >= timeout_seconds
 
     def visit(index: int, total: float, chosen: list[VideoFile]) -> None:
-        nonlocal timed_out, capped
-        if timed_out or capped:
+        nonlocal timed_out
+        if timed_out:
             return
         if timed_out_now():
             timed_out = True
@@ -83,9 +101,6 @@ def find_matches(
                     delta=total - target,
                 )
             )
-            if len(matches) >= max_results:
-                capped = True
-                return
 
         if index >= len(ordered):
             return
@@ -98,9 +113,10 @@ def find_matches(
             chosen.append(video)
             visit(next_index + 1, next_total, chosen)
             chosen.pop()
-            if timed_out or capped:
+            if timed_out:
                 return
 
     visit(0, 0.0, [])
     matches.sort(key=lambda match: (abs(match.delta), len(match.files), match.total_duration))
-    return SearchResult(matches=matches, timed_out=timed_out, capped=capped)
+    selected, capped = _select_disjoint_matches(matches, max_results)
+    return SearchResult(matches=selected, timed_out=timed_out, capped=capped)
