@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 
@@ -26,10 +27,14 @@ def find_matches(
     tolerance: tuple[float, float],
     max_results: int = 20,
     timeout_seconds: float = 10.0,
+    min_files: int = 1,
+    random_seed: int | None = None,
 ) -> SearchResult:
     """Find unordered video combinations whose total duration is in range."""
     if max_results <= 0:
         raise ValueError("max_results must be greater than zero.")
+    if min_files <= 0:
+        raise ValueError("min_files must be greater than zero.")
     lower, upper = tolerance
     min_total = target + lower
     max_total = target + upper
@@ -38,7 +43,9 @@ def find_matches(
     if min_total > max_total:
         raise ValueError("Tolerance produces an empty target range.")
 
-    ordered = sorted(videos, key=lambda video: video.duration, reverse=True)
+    ordered = list(videos)
+    rng = random.Random(random_seed)
+    rng.shuffle(ordered)
     suffix_sums = [0.0] * (len(ordered) + 1)
     for index in range(len(ordered) - 1, -1, -1):
         suffix_sums[index] = suffix_sums[index + 1] + ordered[index].duration
@@ -59,11 +66,16 @@ def find_matches(
         if timed_out_now():
             timed_out = True
             return
+        if len(chosen) + (len(ordered) - index) < min_files:
+            return
         if total > max_total + epsilon:
             return
         if total + suffix_sums[index] < min_total - epsilon:
             return
-        if min_total - epsilon <= total <= max_total + epsilon and chosen:
+        if (
+            min_total - epsilon <= total <= max_total + epsilon
+            and len(chosen) >= min_files
+        ):
             matches.append(
                 Match(
                     files=tuple(sorted(chosen, key=lambda video: str(video.path).lower())),

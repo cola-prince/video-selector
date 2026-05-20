@@ -102,6 +102,7 @@ class VideoSelectorApp(App[None]):
                 yield Input(value="-1,10", placeholder="Tolerance seconds, e.g. -1,10", id="tolerance")
                 yield Input(placeholder="Root directory", id="root")
                 yield Input(value=str(DEFAULT_MAX_RESULTS), placeholder="Max results", id="max-results")
+                yield Input(value="1", placeholder="Min files per result", id="min-files")
                 with Horizontal(classes="button-row"):
                     yield Button("Scan", id="scan", variant="primary")
                     yield Button("Find", id="find", variant="success")
@@ -176,8 +177,11 @@ class VideoSelectorApp(App[None]):
             target = parse_duration(self.query_one("#target", Input).value)
             tolerance = parse_tolerance(self.query_one("#tolerance", Input).value)
             max_results = int(self.query_one("#max-results", Input).value.strip())
+            min_files = int(self.query_one("#min-files", Input).value.strip())
             if max_results <= 0:
                 raise ValueError("Max results must be greater than zero.")
+            if min_files <= 0:
+                raise ValueError("Min files per result must be greater than zero.")
         except (DurationParseError, ValueError) as exc:
             self.set_status(str(exc))
             return
@@ -195,9 +199,10 @@ class VideoSelectorApp(App[None]):
             target,
             tolerance,
             max_results,
+            min_files,
             DEFAULT_TIMEOUT_SECONDS,
         )
-        self.render_results(job, target)
+        self.render_results(job, target, min_files)
 
     def selected_directories(self) -> list[Path]:
         selected: list[Path] = []
@@ -206,7 +211,7 @@ class VideoSelectorApp(App[None]):
                 selected.append(checkbox.directory_path)
         return selected
 
-    def render_results(self, job: MatchJob, target: float) -> None:
+    def render_results(self, job: MatchJob, target: float, min_files: int) -> None:
         log = self.query_one("#results", RichLog)
         log.clear()
 
@@ -233,6 +238,7 @@ class VideoSelectorApp(App[None]):
         status_parts = [
             f"Scanned {job.video_count} videos",
             f"target {format_duration(target)}",
+            f"min files {min_files}",
             f"returned {len(job.result.matches)} matches",
         ]
         if job.result.capped:
@@ -253,6 +259,7 @@ def run_match_job(
     target: float,
     tolerance: tuple[float, float],
     max_results: int,
+    min_files: int,
     timeout_seconds: float,
 ) -> MatchJob:
     paths = find_video_paths(directories)
@@ -262,6 +269,7 @@ def run_match_job(
         target=target,
         tolerance=tolerance,
         max_results=max_results,
+        min_files=min_files,
         timeout_seconds=timeout_seconds,
     )
     return MatchJob(result=result, warnings=warnings, video_count=len(videos))
