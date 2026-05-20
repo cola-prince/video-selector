@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,16 @@ class MatchJob:
     result: SearchResult
     warnings: list[str]
     video_count: int
+
+
+def parse_positive_float(value: str, label: str) -> float:
+    try:
+        parsed = float(value.strip())
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a number.") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{label} must be a finite number greater than zero.")
+    return parsed
 
 
 class VideoSelectorApp(App[None]):
@@ -125,6 +136,11 @@ class VideoSelectorApp(App[None]):
                     id="max-results",
                 )
                 yield Input(
+                    value=f"{DEFAULT_TIMEOUT_SECONDS:g}",
+                    placeholder="Search timeout seconds",
+                    id="timeout-seconds",
+                )
+                yield Input(
                     value="1", placeholder="Min files per result", id="min-files"
                 )
                 with Horizontal(classes="button-row"):
@@ -202,6 +218,10 @@ class VideoSelectorApp(App[None]):
             tolerance = parse_tolerance(self.query_one("#tolerance", Input).value)
             output_text = self.query_one("#output", Input).value.strip()
             max_results = int(self.query_one("#max-results", Input).value.strip())
+            timeout_seconds = parse_positive_float(
+                self.query_one("#timeout-seconds", Input).value,
+                "Search timeout seconds",
+            )
             min_files = int(self.query_one("#min-files", Input).value.strip())
             if max_results <= 0:
                 raise ValueError("Max results must be greater than zero.")
@@ -225,7 +245,7 @@ class VideoSelectorApp(App[None]):
             tolerance,
             max_results,
             min_files,
-            DEFAULT_TIMEOUT_SECONDS,
+            timeout_seconds,
         )
         export_path: Path | None = None
         if output_text and job.result.matches:
@@ -236,11 +256,11 @@ class VideoSelectorApp(App[None]):
                     Path(output_text),
                 )
             except Exception as exc:
-                self.render_results(job, target, min_files)
+                self.render_results(job, target, min_files, timeout_seconds)
                 self.set_status(f"Results found, but export failed: {exc}")
                 return
 
-        self.render_results(job, target, min_files, export_path)
+        self.render_results(job, target, min_files, timeout_seconds, export_path)
 
     def selected_directories(self) -> list[Path]:
         selected: list[Path] = []
@@ -254,6 +274,7 @@ class VideoSelectorApp(App[None]):
         job: MatchJob,
         target: float,
         min_files: int,
+        timeout_seconds: float,
         export_path: Path | None = None,
     ) -> None:
         log = self.query_one("#results", RichLog)
@@ -288,7 +309,7 @@ class VideoSelectorApp(App[None]):
         if job.result.capped:
             status_parts.append("stopped at max results")
         if job.result.timed_out:
-            status_parts.append(f"timed out after {DEFAULT_TIMEOUT_SECONDS:g}s")
+            status_parts.append(f"timed out after {timeout_seconds:g}s")
         if export_path is not None:
             status_parts.append(f"exported to {export_path}")
         self.set_status("; ".join(status_parts) + ".")
