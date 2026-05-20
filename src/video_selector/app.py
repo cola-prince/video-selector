@@ -6,7 +6,16 @@ from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, RichLog, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Footer,
+    Header,
+    Input,
+    Label,
+    RichLog,
+    Static,
+)
 
 from video_selector.duration import (
     DurationParseError,
@@ -21,7 +30,7 @@ from video_selector.search import SearchResult, find_matches
 
 
 DEFAULT_MAX_RESULTS = 20
-DEFAULT_TIMEOUT_SECONDS = 10.0
+DEFAULT_TIMEOUT_SECONDS = 5 * 60
 
 
 @dataclass(frozen=True)
@@ -99,12 +108,25 @@ class VideoSelectorApp(App[None]):
         with Horizontal(id="main"):
             with Vertical(id="form"):
                 yield Label("Inputs", classes="section-title")
-                yield Input(placeholder="Target duration, e.g. 123, 01:23, 01:02:03", id="target")
-                yield Input(value="-1,10", placeholder="Tolerance seconds, e.g. -1,10", id="tolerance")
+                yield Input(
+                    placeholder="Target duration, e.g. 123, 01:23, 01:02:03",
+                    id="target",
+                )
+                yield Input(
+                    value="-1,10",
+                    placeholder="Tolerance seconds, e.g. -1,10",
+                    id="tolerance",
+                )
                 yield Input(placeholder="Root directory", id="root")
                 yield Input(placeholder="Optional output directory", id="output")
-                yield Input(value=str(DEFAULT_MAX_RESULTS), placeholder="Max results", id="max-results")
-                yield Input(value="1", placeholder="Min files per result", id="min-files")
+                yield Input(
+                    value=str(DEFAULT_MAX_RESULTS),
+                    placeholder="Max results",
+                    id="max-results",
+                )
+                yield Input(
+                    value="1", placeholder="Min files per result", id="min-files"
+                )
                 with Horizontal(classes="button-row"):
                     yield Button("Scan", id="scan", variant="primary")
                     yield Button("Find", id="find", variant="success")
