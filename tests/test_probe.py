@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 
 from video_selector import probe as probe_module
@@ -34,7 +35,7 @@ def test_probe_videos_collects_successes_and_probe_warnings():
             Path("last.mov"): 7.0,
         }[path]
 
-    videos, warnings = probe_videos(paths, runner=runner)
+    videos, warnings = probe_videos(paths, runner=runner, max_workers=1)
 
     assert calls == paths
     assert videos == [
@@ -42,3 +43,40 @@ def test_probe_videos_collects_successes_and_probe_warnings():
         VideoFile(path=Path("last.mov"), duration=7.0),
     ]
     assert warnings == ["cannot read broken.mp4"]
+
+
+def test_probe_videos_returns_results_in_input_order_when_concurrent():
+    paths = [Path("slow.mp4"), Path("fast.mp4"), Path("last.mov")]
+    slow_can_finish = threading.Event()
+    finish_order = []
+
+    def runner(path):
+        if path == Path("slow.mp4"):
+            slow_can_finish.wait(timeout=1)
+        else:
+            finish_order.append(path)
+            slow_can_finish.set()
+        return {
+            Path("slow.mp4"): 12.5,
+            Path("fast.mp4"): 7.0,
+            Path("last.mov"): 3.0,
+        }[path]
+
+    videos, warnings = probe_videos(paths, runner=runner, max_workers=2)
+
+    assert finish_order[0] == Path("fast.mp4")
+    assert videos == [
+        VideoFile(path=Path("slow.mp4"), duration=12.5),
+        VideoFile(path=Path("fast.mp4"), duration=7.0),
+        VideoFile(path=Path("last.mov"), duration=3.0),
+    ]
+    assert warnings == []
+
+
+def test_probe_videos_rejects_non_positive_max_workers():
+    try:
+        probe_videos([Path("video.mp4")], runner=lambda path: 1.0, max_workers=0)
+    except ValueError as exc:
+        assert "max_workers" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")

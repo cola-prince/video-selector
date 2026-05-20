@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from video_selector.scanner import VideoFile
@@ -78,14 +79,32 @@ def probe_duration(path: Path) -> float:
 def probe_videos(
     paths: Iterable[Path],
     runner: ProbeRunner = probe_duration,
+    max_workers: int | None = None,
 ) -> tuple[list[VideoFile], list[str]]:
+    path_list = list(paths)
+    if not path_list:
+        return [], []
+
+    if max_workers is None:
+        max_workers = min(8, len(path_list))
+    if max_workers <= 0:
+        raise ValueError("max_workers must be greater than zero.")
+
     videos: list[VideoFile] = []
     warnings: list[str] = []
 
-    for path in paths:
+    def probe_path(path: Path) -> tuple[Path, float | None, str | None]:
         try:
-            videos.append(VideoFile(path=path, duration=runner(path)))
+            return path, runner(path), None
         except ProbeError as exc:
-            warnings.append(str(exc))
+            return path, None, str(exc)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for path, duration, warning in executor.map(probe_path, path_list):
+            if warning is not None:
+                warnings.append(warning)
+                continue
+            if duration is not None:
+                videos.append(VideoFile(path=path, duration=duration))
 
     return videos, warnings
